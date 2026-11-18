@@ -48,14 +48,27 @@ try:
     assert call('endpoint/governanceReport', identities['openidm-authorized'])[0] == 403
     assert call('endpoint/governanceReport?capabilities=true', identities['openidm-authorized'])[0] == 403
     auditor = identities['openidm-auditor']
-    assert call('endpoint/governanceReport?capabilities=true', auditor)[0] == 200
-    status, report = call('endpoint/governanceReport?offset=0', auditor)
+    cap_status, capabilities = call('endpoint/governanceReport?capabilities=true', auditor)
+    assert cap_status == 200
+    catalog_status, catalog = call('endpoint/governanceReport?capabilities=true&workflows=true', auditor)
+    assert catalog_status == 200
+    assert any(item['id'] == 'servicePrincipalOwner' for item in catalog['workflows'])
+    status, filtered = call('endpoint/governanceReport?report=workflow-history&workflow=servicePrincipalOwner', auditor)
+    assert status == 200
+    assert 'Subject' in filtered['columns']
+    workflow_column = filtered['columns'].index('Workflow')
+    assert all(row[workflow_column] == 'servicePrincipalOwner' for row in filtered['rows'])
+    assert call('endpoint/governanceReport?report=workflow-history&workflow=unknown', auditor)[0] == 400
+
+    assert any(item['id'] == 'ownership-history' for item in capabilities['reports'])
+    status, report = call('endpoint/governanceReport?report=ownership-history&offset=0', auditor)
     assert status == 200, ('Auditor export failed', status)
     assert report['filename'].endswith('.csv')
     assert report['header'].startswith('"processId";')
     assert isinstance(report['csv'], str)
     assert call('managed/entraOwnerRequest?_queryFilter=true', auditor)[0] == 403
     assert call('endpoint/governanceReport?offset=-1', auditor)[0] == 400
+    assert call('endpoint/governanceReport?report=not-configured', auditor)[0] == 400
     assert call('endpoint/governanceReport', ADMIN)[0] == 200
     print('PASS: anonymous 401, ordinary user 403, auditor/admin CSV 200, raw data denied, invalid offset 400')
     print('CSV payload bytes:', len(report['csv'].encode('utf-8')))

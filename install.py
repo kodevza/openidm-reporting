@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: CDDL-1.1
-"""Install the read-only auditor CSV export into the local OpenIDM container."""
+"""Install the config-driven, read-only CSV reports into the local OpenIDM container."""
 import argparse
 import datetime
 import json
@@ -16,9 +16,39 @@ MODULE = 'org/forgerock/openidm/ui/common/workflow/GovernanceReport'
 MARKER = '<!-- Governance CSV export -->'
 
 
+def merge_report_config(existing, defaults):
+    """Add the common history profile without replacing administrator-owned profiles."""
+    import copy
+    result = copy.deepcopy(existing)
+    profiles = result['reports']
+    if not any(p['id'] == 'workflow-history' for p in profiles):
+        profiles.append(copy.deepcopy(next(p for p in defaults['reports'] if p['id'] == 'workflow-history')))
+        if existing == {'defaultReport':'ownership-history', 'reports':[defaults['reports'][0]]}:
+            result['defaultReport'] = 'workflow-history'
+    return result
+
+
+def merge_history_indexes(existing, additions):
+    import copy
+    result = copy.deepcopy(existing)
+    classes = result['dbStructure']['orientdbClass']
+    for name, indexes in additions.items():
+        if name not in classes:
+            raise ValueError('Missing workflow history class: ' + name)
+        current = classes[name].setdefault('index', [])
+        for index in indexes:
+            keys = index.get('propertyNames', [index.get('propertyName')])
+            if not any(item.get('propertyNames', [item.get('propertyName')]) == keys for item in current):
+                current.append(copy.deepcopy(index))
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--container', default='openidm')
+    parser.add_argument('--install-indexes', action='store_true', help='Merge reporting indexes into the existing OrientDB configuration')
+    parser.add_argument('--reload', action='store_true', help='Compile the updated endpoint immediately using OPENIDM_PASSWORD')
+    parser.add_argument('--sync-defaults', action='store_true', help='Apply the repository workflow-history profile, including default column visibility')
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--create-role', action='store_true', help='Create internal auditor role using OPENIDM_PASSWORD')
     parser.add_argument('--url', default='http://localhost:8081/openidm')
@@ -26,8 +56,8 @@ def main():
     args = parser.parse_args()
     def docker(*cmd):
         return subprocess.check_output(['docker', *cmd])
-    if args.create_role and not os.environ.get('OPENIDM_PASSWORD'):
-        parser.error('--create-role requires OPENIDM_PASSWORD')
+    if (args.create_role or args.reload) and not os.environ.get('OPENIDM_PASSWORD'):
+        parser.error('--create-role and --reload require OPENIDM_PASSWORD')
     root = '/opt/openidm/'
     access_path = root + 'script/access.js'
     access = docker('exec', args.container, 'cat', access_path).decode()
@@ -40,10 +70,33 @@ def main():
             'methods':'read', 'actions':''}) + ');\n'
     changes = {
         access_path: access,
-        root + 'script/workflow/governanceReport.js': (ASSETS / 'governanceReport.js').read_text(),
+        root + 'script/workflow/governanceReport.js': (ASSETS / 'reportEndpoint.js').read_text(),
         root + 'conf/endpoint-governanceReport.json': json.dumps({
             'type':'text/javascript', 'file':'workflow/governanceReport.js'}, indent=2) + '\n'
     }
+    if args.install_indexes:
+        repo_path = root + 'conf/repo.orientdb.json'
+        existing_repo = json.loads(docker('exec', args.container, 'cat', repo_path))
+        merged_repo = merge_history_indexes(existing_repo, json.loads((ASSETS / 'history-indexes.json').read_text()))
+        if merged_repo != existing_repo:
+            changes[repo_path] = json.dumps(merged_repo, indent=2) + '\n'
+    # Add a missing built-in profile while preserving administrator-defined reports.
+    config_path = root + 'conf/custom-reporting.json'
+    defaults = json.loads((ASSETS / 'custom-reporting.json').read_text())
+    if subprocess.run(['docker','exec',args.container,'test','-e',config_path]).returncode != 0:
+        changes[config_path] = json.dumps(defaults, indent=2) + '\n'
+    else:
+        existing = json.loads(docker('exec', args.container, 'cat', config_path))
+        merged = merge_report_config(existing, defaults)
+        if args.sync_defaults:
+            profile = next(p for p in defaults['reports'] if p['id'] == 'workflow-history')
+            merged['reports'] = [profile if p['id'] == 'workflow-history' else p for p in merged['reports']]
+            merged['defaultReport'] = 'workflow-history'
+            for p in merged['reports']:
+                if p['id'] == 'ownership-history' and p['title'] == 'Historia zmian ownershipu':
+                    p['title'] = 'Ownership History'
+        if merged != existing:
+            changes[config_path] = json.dumps(merged, indent=2) + '\n'
     for ui in ('selfservice', 'admin'):
         base = root + 'ui/' + ui + '/'
         nav_path = base + 'extension/templates/common/NavigationTemplate.html'
@@ -51,7 +104,32 @@ def main():
         if MARKER not in nav:
             nav += '\n' + MARKER + '\n<script>require(["' + MODULE + '"], function (install) { install(); });</script>\n'
         changes[nav_path] = nav
-        changes[base + 'extension/' + MODULE + '.js'] = (ASSETS / 'GovernanceReport.js').read_text()
+        # Register on startup as well as navigation so bookmarked pages and reloads work.
+        index_path = base + 'extension/index.html'
+        result = subprocess.run(['docker','exec',args.container,'cat',index_path],capture_output=True)
+        index = result.stdout.decode() if result.returncode == 0 else docker('exec', args.container, 'cat', base + 'default/index.html').decode()
+        startup_marker = '<!-- Workflow history startup -->'
+        if startup_marker not in index:
+            bootstrap = startup_marker + '\n<script>(function (config) { var previous = config.callback; config.callback = function () { ' + \
+                'if (previous) { previous.apply(this, arguments); } require(["' + MODULE + '"], function (install) { install(); }); ' + \
+                '}; }(require));</script>\n'
+            anchor = '<script data-main='
+            if anchor not in index:
+                raise ValueError('Unsupported UI index: RequireJS startup not found')
+            index = index.replace(anchor, bootstrap + anchor, 1)
+        changes[index_path] = index
+        # Remove the loader from the superseded footer registration if it exists.
+        footer_path = base + 'extension/templates/common/FooterTemplate.html'
+        result = subprocess.run(['docker','exec',args.container,'cat',footer_path],capture_output=True)
+        if result.returncode == 0 and MARKER in result.stdout.decode():
+            footer = result.stdout.decode()
+            loader = '\n' + MARKER + '\n<script>require(["' + MODULE + '"], function (install) { install(); });</script>\n'
+            changes[footer_path] = footer.replace(loader, '')
+        changes[base + 'extension/' + MODULE + '.js'] = (ASSETS / 'reportUI.js').read_text()
+        changes[base + 'extension/' + MODULE.rsplit('/', 1)[0] + '/WorkflowHistory.js'] = (ASSETS / 'historyView.js').read_text()
+        changes[base + 'extension/' + MODULE.rsplit('/', 1)[0] + '/WorkflowHistoryReact.js'] = (ASSETS / 'historyApp.js').read_text()
+        changes[base + 'extension/' + MODULE.rsplit('/', 1)[0] + '/WorkflowHistoryReact.LICENSE.txt'] = (ASSETS / 'historyApp.LICENSE.txt').read_text()
+        changes[base + 'extension/templates/reports/WorkflowHistory.html'] = (ASSETS / 'WorkflowHistory.html').read_text()
     previous = {}
     for remote, content in changes.items():
         result = subprocess.run(['docker','exec',args.container,'cat',remote],capture_output=True)
@@ -62,7 +140,7 @@ def main():
             previous[remote] = old
     print('Files to update:', len(previous))
     if args.check:
-        print('Validated endpoint, server-side role check and both navigation extensions; no changes made.')
+        print('Validated endpoint, report config installation, access rule and navigation extensions; no changes made.')
         return
     if previous:
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
@@ -85,6 +163,15 @@ def main():
                 docker('exec',args.container,'mkdir','-p',str(Path(remote).parent))
                 docker('cp',str(file),args.container + ':' + remote)
         print('Backup:',backup)
+    if args.reload:
+        headers = {'X-OpenIDM-Username':args.username, 'X-OpenIDM-Password':os.environ['OPENIDM_PASSWORD'],
+                   'Content-Type':'application/json'}
+        request = urllib.request.Request(args.url.rstrip('/') + '/script?_action=compile', headers=headers,
+            data=json.dumps({'type':'text/javascript','file':'workflow/governanceReport.js'}).encode(), method='POST')
+        with urllib.request.urlopen(request, timeout=30) as response:
+            if json.load(response) is not True:
+                raise RuntimeError('Endpoint compilation did not succeed')
+        print('Updated reporting endpoint compiled and active.')
     if args.create_role:
         url = args.url.rstrip('/') + '/repo/internal/role/openidm-auditor'
         headers = {'X-OpenIDM-Username':args.username,'X-OpenIDM-Password':os.environ['OPENIDM_PASSWORD'],
@@ -100,7 +187,8 @@ def main():
                     data=json.dumps({'name':'Auditor','description':'Read governance CSV reports'}).encode()),timeout=30):
                 pass
         print('Auditor role exists. Assign it only to approved users through authzRoles.')
-    print('CSV extension installed. Reload the UI. Requires openidm-auditor or openidm-admin.')
+    print('Report tables and CSV exports installed. Reload the UI. Requires openidm-auditor or openidm-admin.')
+    print('Report profiles: ' + config_path + ' (existing configuration is preserved).')
     if not args.create_role:
         print('Role provisioning was not requested; use --create-role with OPENIDM_PASSWORD if needed.')
 

@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES5",
+    "module": "none",
+    "lib": [
+      "ES2015",
+      "DOM"
+    ],
+    "strict": true,
+    "outDir": "assets",
+    "removeComments": false,
+    "noEmitOnError": true,
+    "types": []
+  },
+  "include": [
+    "src/reportEndpoint.ts",
+    "src/reportUI.ts",
+    "src/historyView.ts"
+  ]
+}

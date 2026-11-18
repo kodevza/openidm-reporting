@@ -26,3 +26,5 @@ coverage/
 reports/
 exports/
 gitleaks-report.*
+
+node_modules/

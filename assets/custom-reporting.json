@@ -1,0 +1,199 @@
+{
+  "defaultReport": "workflow-history",
+  "reports": [
+    {
+      "id": "ownership-history",
+      "title": "Ownership History",
+      "filename": "governance-ownership-history.csv",
+      "source": "managed/entraOwnerRequest",
+      "filter": "true",
+      "columns": [
+        {
+          "header": "processId",
+          "path": "_id"
+        },
+        {
+          "header": "servicePrincipalLocalId",
+          "path": "servicePrincipalId"
+        },
+        {
+          "header": "servicePrincipalName",
+          "path": "servicePrincipalName"
+        },
+        {
+          "header": "previousOwnerRef",
+          "path": "previousOwnerRef"
+        },
+        {
+          "header": "newOwnerLocalId",
+          "path": "newOwnerId"
+        },
+        {
+          "header": "newOwnerUserName",
+          "path": "newOwnerUserName"
+        },
+        {
+          "header": "requester",
+          "path": "requester"
+        },
+        {
+          "header": "reason",
+          "path": "reason"
+        },
+        {
+          "header": "status",
+          "path": "status"
+        },
+        {
+          "header": "createdAt",
+          "path": "createdAt"
+        },
+        {
+          "header": "decidedBy",
+          "path": "decidedBy"
+        },
+        {
+          "header": "decidedAt",
+          "path": "decidedAt"
+        },
+        {
+          "header": "recordType",
+          "value": "ownership_assignment"
+        }
+      ]
+    },
+    {
+      "id": "workflow-history",
+      "title": "Workflow History",
+      "filename": "workflow-history.csv",
+      "sources": [
+        "managed/entraOwnerRequest"
+      ],
+      "filter": "true",
+      "columns": [
+        {
+          "header": "Process ID",
+          "path": "_id",
+          "visible": false,
+          "filterType": "text"
+        },
+        {
+          "header": "Workflow",
+          "path": "processType",
+          "visible": false
+        },
+        {
+          "header": "Record Type",
+          "path": "recordType",
+          "visible": false
+        },
+        {
+          "header": "Subject",
+          "path": "subject",
+          "visible": true,
+          "presentation": {
+            "kind": "entraObject",
+            "tenantIdPath": "tenantId",
+            "sourcePath": "source",
+            "objectTypePath": "subjectType"
+          },
+          "filterType": "text"
+        },
+        {
+          "header": "Subject Name",
+          "path": "subjectName",
+          "visible": true,
+          "filterType": "text"
+        },
+        {
+          "header": "Subject Type",
+          "path": "subjectType",
+          "visible": false
+        },
+        {
+          "header": "Data Source",
+          "path": "source",
+          "visible": false
+        },
+        {
+          "header": "Tenant ID",
+          "path": "tenantId",
+          "visible": false
+        },
+        {
+          "header": "Reviewer",
+          "path": "reviewer",
+          "visible": true,
+          "presentation": {
+            "kind": "user",
+            "tenantIdPath": "tenantId",
+            "localIdPath": "newOwnerId"
+          },
+          "filterType": "person"
+        },
+        {
+          "header": "Requested By",
+          "path": "requester",
+          "visible": false,
+          "presentation": {
+            "kind": "user",
+            "tenantIdPath": "tenantId"
+          },
+          "filterType": "person"
+        },
+        {
+          "header": "Reason",
+          "path": "reason",
+          "visible": false,
+          "filterType": "text"
+        },
+        {
+          "header": "Status",
+          "path": "status",
+          "visible": true,
+          "filterType": "enum",
+          "filterValues": [
+            {
+              "id": "pending",
+              "title": "Pending"
+            },
+            {
+              "id": "accepted",
+              "title": "Accepted"
+            },
+            {
+              "id": "rejected",
+              "title": "Rejected"
+            },
+            {
+              "id": "canceled",
+              "title": "Canceled"
+            }
+          ]
+        },
+        {
+          "header": "Started At",
+          "path": "createdAt",
+          "visible": true,
+          "filterType": "date"
+        },
+        {
+          "header": "Decided By",
+          "path": "decidedBy",
+          "visible": true,
+          "presentation": {
+            "kind": "user",
+            "tenantIdPath": "tenantId"
+          },
+          "filterType": "person"
+        },
+        {
+          "header": "Decided At",
+          "path": "decidedAt",
+          "visible": true,
+          "filterType": "date"
+        }
+      ]
+    }
+  ]
+}

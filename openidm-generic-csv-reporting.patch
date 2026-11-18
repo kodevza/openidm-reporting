@@ -1,0 +1,772 @@
+diff --git a/README.md b/README.md
+index 89287ba..6263734 100644
+--- a/README.md
++++ b/README.md
+@@ -26,64 +26,147 @@ existing navigation extension. These are backed-up deployment registrations.
+ It does not edit the OpenIDM source checkout, Java bundles, bundled UI JavaScript
+ or default UI templates. Module implementation and tests remain in this directory.
+ 
+-# Auditor CSV export
++# Configurable CSV reports (light reporting)
+ 
+-A logged-in auditor can click **Raport CSV** in the navigation bar (Self Service
+-or Admin). No reporting dashboard is required. The server permits only
+-`openidm-auditor` and `openidm-admin`; ordinary authenticated users cannot access
+-the endpoint, including by calling it directly.
++This is **CSV-first**, not a reporting database or BPMN process analytics engine.
++Each report is a named, **administrator-configured projection of one queryable
++OpenIDM collection** (for example `managed/entraOwnerRequest`). Add a report by
++editing JSON; no Java, dashboard, or new JavaScript code is required.
+ 
+-Install into the running local Docker deployment:
++A logged-in user with `openidm-auditor` or `openidm-admin` can download a single
++CSV from the navigation bar. With multiple configured reports, a simple CSV
++menu appears. An ordinary user cannot read reports, even by calling the API.
++**All auditor-role users can access all configured reports.** Do not configure
++sensitive fields or collections unless that level of access is appropriate.
++
++## Installation
++
++For a local Docker deployment:
+ 
+ ```sh
+ python3 install.py --check
+ python3 install.py
+ ```
+ 
+-The installer preserves the current navigation extensions and access rules and
+-backs up changed files under `/opt/openidm/workflow-backups/reporting-*`.
+-Reload the browser after installation. Navigation templates must already exist
+-in the extension directories (the Entra user-menu installer provides them).
++The installer registers `endpoint/governanceReport` (path retained for backward
++compatibility), the UI navigation entry and `/opt/openidm/conf/custom-reporting.json`.
++It creates the default JSON **only if absent**. Subsequent installs preserve your
++report configuration. It backs up other changed deployment files under
++`/opt/openidm/workflow-backups/reporting-*`.
++
++Navigation templates must already exist in both extension directories (for
++example from the Entra user-menu installer). Reload the browser after install.
++No OpenIDM Java sources or default UI templates are modified.
+ 
+-To create the internal role, supply administrator credentials through the
+-`OPENIDM_PASSWORD` environment variable and run:
++Create the internal auditor role, if necessary, by providing admin credentials:
+ 
+ ```sh
+-python3 install.py --create-role
++OPENIDM_PASSWORD='...' python3 install.py --create-role
+ ```
+ 
+-Assign the internal authorization role `openidm-auditor` to approved users through
++Assign the internal `openidm-auditor` authorization role to approved users via
+ `managed/user.authzRoles` (relationship `_ref`:
+ `repo/internal/role/openidm-auditor`). Do not grant administrator access.
+-Sign out and sign in after assigning a role. Existing Entra authorization mapping
+-retains non-administrator roles from `authzRoles`; Entra access-group membership
+-is still required. The installer never grants a role to any user automatically.
++Sign out and sign in after changing authorization roles. Existing Entra
++mapping retains non-admin roles in `authzRoles`; Entra access-group membership
++may still be required. The installer never assigns a role to a real user.
++
++## Configure any queryable process data
++
++Edit `/opt/openidm/conf/custom-reporting.json` in the running deployment.
++The corresponding OpenIDM config resource is `config/custom/reporting`.
++Keep this config in version control or in your Docker volume, not only in an
++ephemeral container layer.
++
++An example *additional* report entry to place in the `reports` array (replace
++`managed/approvalRecord` and its attributes with your actual process schema):
++
++```json
++{
++  "id": "approval-tasks",
++  "title": "Akceptacje",
++  "filename": "approval-tasks.csv",
++  "source": "managed/approvalRecord",
++  "filter": "/status eq \"closed\"",
++  "columns": [
++    { "header": "Process", "path": "process.id" },
++    { "header": "Approver", "path": "approval.actor.name" },
++    { "header": "Outcome", "path": "status" },
++    { "header": "RecordType", "value": "approval" }
++  ]
++}
++```
++
++`defaultReport` chooses which report a request without `?report=` returns,
++for compatibility with old clients. `id` is a stable identifier; `title` is
++shown in the UI; `filename` names the download. `source` identifies a queryable
++OpenIDM resource (`managed/`, `repo/`, `audit/`, or `workflow/`); `filter` is a
++server-side OpenIDM `_queryFilter` string, defaulting to `true`. `columns` are
++ordered; each has a CSV `header` and **either** `path` (a dotted nested property)
++or `value` (a constant string/number/boolean/null). Empty/missing paths become
++empty cells; arrays/objects are serialized as JSON within one CSV cell.
++
++The resource must really support `openidm.query`, field projection, and paging.
++**A BPMN process definition alone is not a collection of persisted report rows.**
++If a workflow stores its state only inside the process engine, first verify its
++history API/query support or persist the events you need to a managed/audit
++collection. This module cannot reconstruct events or historical ownership states
++that were never stored.
++
++For safety, callers can supply only a configured report ID and a numeric page
++offset. They **cannot** supply resource paths, field lists, or filters via HTTP.
++The server reads only the configured projected fields (plus `_id` to sort).
++Malformed configuration returns 500 rather than exporting unvalidated data.
++The auditor access rule is still also enforced in `script/access.js`.
++
++## Programmatic export
++
++```sh
++export OPENIDM_USERNAME='openidm-admin'
++export OPENIDM_PASSWORD='...'
++python3 export.py --report ownership-history --output exports/ownership-history.csv
++```
++
++The optional standard-library CLI fetches pages sequentially and writes the CSV
++as UTF-8 with BOM, atomically (file mode 0600). It can be called from a cron/job
++and its CSV consumed by another tool. Avoid using an admin account for a
++scheduled job; prefer a dedicated auditor identity.
++
++API endpoints used by both the UI and CLI:
++
++```text
++GET /openidm/endpoint/governanceReport?capabilities=true
++GET /openidm/endpoint/governanceReport?report=ownership-history&offset=0
++```
+ 
+-The CSV includes one row per `entraOwnerRequest`: process ID, local principal ID,
+-principal name, previous/new owner, requester, reason, status, creation/decision
+-times and decision actor. It uses UTF-8 with BOM, semicolons, quoted fields and
+-spreadsheet formula protection. Records are read in pages of 500; the browser
+-assembles the download. It is a live export, not a database snapshot, so changes
+-during a long export may affect the result.
++The endpoint returns **JSON pages**, not a single CSV HTTP stream. Each page has
++`header`, `csv`, `nextOffset`, `filename`, `report`. Page size is fixed at 500;
++rows are sorted by `_id` and escaped with `;` separators and quoted cells.
++Formula-looking spreadsheet inputs are prefixed to prevent CSV injection.
++The default config reproduces the previous `entraOwnerRequest` history export,
++including the `recordType=ownership_assignment` constant. That field is **not**
++a recertification indicator.
+ 
+-This reports **ownership assignment history**. `decidedAt` means ownership
+-acceptance/rejection, not periodic recertification. `recordType` explicitly says
+-`ownership_assignment`. No last-recertification date is fabricated. A dedicated
+-recertification process/data model is needed before that field can be reported.
+-Workflow task timings and campaign metrics are outside this first export.
++**Limitations:** this is a live paged query, not a transactional snapshot.
++Changes during a long export may cause duplicate/missing rows. Report fields
++must exist in the stored process objects. A single report reads a single
++collection: joins, cross-process correlations, SLA calculations and historical
++ownership reconstruction belong downstream (or require an event data model).
+ 
+-Validation:
++## Validation
+ 
+ ```sh
+ node --test tests/report.test.cjs
++python3 -m unittest discover -s tests -p 'test_*.py'
++python3 -m py_compile install.py export.py tests/live.py
+ ```
+ 
+-Live verification (requires administrator credentials in OPENIDM_PASSWORD):
++Live authorization/export test (requires a running OpenIDM and admin credentials):
+ 
+ ```sh
+-python3 tests/live.py
++OPENIDM_PASSWORD='...' python3 tests/live.py
+ ```
+ 
+-The live test creates two disposable internal users, checks anonymous/ordinary/
+-auditor/admin access, then deletes only its fixtures using their current revisions.
+-It does not create Graph objects or assign a role to any existing user.
++This live test creates two disposable internal users, verifies anonymous,
++ordinary, auditor and admin permissions, then removes only its fixtures.
++It does not create Graph objects or assign roles to any existing user.
+diff --git a/assets/GovernanceReport.js b/assets/GovernanceReport.js
+index ea0dadc..57905e6 100644
+--- a/assets/GovernanceReport.js
++++ b/assets/GovernanceReport.js
+@@ -1,33 +1,81 @@
+ // SPDX-License-Identifier: CDDL-1.1
++// Small navigation-only UI: one link for a single report, a dropdown for multiple.
+ define(['jquery', 'org/forgerock/openidm/ui/common/delegates/ResourceDelegate'], function ($, delegate) {
+     return function () {
+         if ($('#governance-report-download').length) { return; }
+-        delegate.getResource('endpoint/governanceReport?capabilities=true').then(function () {
+-            var link = $('<a href="#" id="governance-report-download">Raport CSV</a>');
+-            $('#mainNavHolder .navbar-nav').first().append($('<li>').append(link));
+-            link.on('click', function (event) {
+-                event.preventDefault();
+-                if (link.attr('aria-disabled') === 'true') { return; }
+-                link.attr('aria-disabled', 'true').text('Pobieranie raportu…');
+-                var parts = [], filename;
++        delegate.getResource('endpoint/governanceReport?capabilities=true').then(function (data) {
++            if (!data || !data.reports || !data.reports.length) { return; }
++            var nav = $('#mainNavHolder .navbar-nav').first();
++            if (!nav.length) { return; }
++            var busy = false;
++            function download(report, link) {
++                if (busy) { return; }
++                busy = true;
++                var original = link.attr('data-report-title') || link.text();
++                link.attr('data-report-title', original);
++                link.text('Pobieranie raportu…').attr('aria-disabled', 'true');
++                var parts = [], filename, header;
+                 function page(offset) {
+-                    return delegate.getResource('endpoint/governanceReport?offset=' + offset).then(function (data) {
+-                        if (!parts.length) { parts.push('\ufeff' + data.header + '\r\n'); filename = data.filename; }
++                    var uri = 'endpoint/governanceReport?report=' + encodeURIComponent(report.id) + '&offset=' + offset;
++                    return delegate.getResource(uri).then(function (data) {
++                        // Fail closed rather than silently combine pages from different schemas.
++                        if (data.report !== report.id || (header && data.header !== header)) {
++                            throw new Error('CSV report changed during export');
++                        }
++                        if (!parts.length) {
++                            header = data.header;
++                            filename = data.filename;
++                            parts.push('\ufeff' + header + '\r\n');
++                        }
++                        if (typeof data.csv !== 'string') { throw new Error('Missing CSV data'); }
+                         if (data.csv) { parts.push(data.csv + '\r\n'); }
+-                        if (data.nextOffset !== null) { return page(data.nextOffset); }
+-                        var url = URL.createObjectURL(new Blob(parts, {type:'text/csv;charset=utf-8'})),
+-                            download = document.createElement('a');
+-                        download.href = url; download.download = filename;
+-                        document.body.appendChild(download); download.click(); download.remove();
++                        if (data.nextOffset !== null) {
++                            if (typeof data.nextOffset !== 'number' || data.nextOffset <= offset) {
++                                throw new Error('Invalid CSV paging');
++                            }
++                            return page(data.nextOffset);
++                        }
++                        var url = URL.createObjectURL(new Blob(parts, {type:'text/csv;charset=utf-8'}));
++                        var anchor = document.createElement('a');
++                        anchor.href = url;
++                        anchor.download = filename;
++                        document.body.appendChild(anchor);
++                        anchor.click();
++                        anchor.remove();
+                         setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+                     });
+                 }
+                 page(0).then(function () {
+-                    link.text('Raport CSV').attr('aria-disabled', 'false');
++                    link.text(original).attr('aria-disabled', 'false');
++                    busy = false;
+                 }, function () {
+                     link.text('Błąd pobierania — spróbuj ponownie').attr('aria-disabled', 'false');
++                    busy = false;
+                 });
+-            });
+-        }, function () { /* Hidden for users without report access. */ });
++            }
++            function item(report, parent) {
++                var link = $('<a href="#">').text(report.title);
++                parent.append($('<li>').append(link));
++                link.on('click', function (event) {
++                    event.preventDefault();
++                    download(report, link);
++                });
++            }
++            if (data.reports.length === 1) {
++                var link = $('<a href="#">').text('Raport CSV');
++                nav.append($('<li id="governance-report-download">').append(link));
++                link.on('click', function (event) {
++                    event.preventDefault();
++                    download(data.reports[0], link);
++                });
++            } else {
++                var dropdown = $('<li class="dropdown" id="governance-report-download">');
++                var toggle = $('<a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">')
++                    .text('Raporty CSV ').append($('<span class="caret">'));
++                var menu = $('<ul class="dropdown-menu">');
++                data.reports.forEach(function (report) { item(report, menu); });
++                nav.append(dropdown.append(toggle).append(menu));
++            }
++        }, function () { /* Do not show reporting for users without access. */ });
+     };
+ });
+diff --git a/assets/custom-reporting.json b/assets/custom-reporting.json
+new file mode 100644
+index 0000000..5555bef
+--- /dev/null
++++ b/assets/custom-reporting.json
+@@ -0,0 +1,27 @@
++{
++  "defaultReport": "ownership-history",
++  "reports": [
++    {
++      "id": "ownership-history",
++      "title": "Historia zmian ownershipu",
++      "filename": "governance-ownership-history.csv",
++      "source": "managed/entraOwnerRequest",
++      "filter": "true",
++      "columns": [
++        { "header": "processId", "path": "_id" },
++        { "header": "servicePrincipalLocalId", "path": "servicePrincipalId" },
++        { "header": "servicePrincipalName", "path": "servicePrincipalName" },
++        { "header": "previousOwnerRef", "path": "previousOwnerRef" },
++        { "header": "newOwnerLocalId", "path": "newOwnerId" },
++        { "header": "newOwnerUserName", "path": "newOwnerUserName" },
++        { "header": "requester", "path": "requester" },
++        { "header": "reason", "path": "reason" },
++        { "header": "status", "path": "status" },
++        { "header": "createdAt", "path": "createdAt" },
++        { "header": "decidedBy", "path": "decidedBy" },
++        { "header": "decidedAt", "path": "decidedAt" },
++        { "header": "recordType", "value": "ownership_assignment" }
++      ]
++    }
++  ]
++}
+diff --git a/assets/governanceReport.js b/assets/governanceReport.js
+index 24a262b..7556d3a 100644
+--- a/assets/governanceReport.js
++++ b/assets/governanceReport.js
+@@ -1,32 +1,91 @@
+ // SPDX-License-Identifier: CDDL-1.1
+-// Only this projection is exposed to auditors; no general managed/workflow access.
++// Config-driven, read-only CSV projection. Clients choose only a configured report ID.
+ (function () {
+     if (request.method !== 'read') { throw {code:405, message:'Read only'}; }
+     var roles = context.security && context.security.authorization && context.security.authorization.roles || [];
+     if (roles.indexOf('openidm-auditor') < 0 && roles.indexOf('openidm-admin') < 0) {
+         throw {code:403, message:'Auditor role required'};
+     }
++
++    function invalidConfig() { throw {code:500, message:'Invalid CSV reporting configuration'}; }
++    var config = openidm.read('config/custom/reporting');
++    if (!config || !Array.isArray(config.reports) || !config.reports.length) { invalidConfig(); }
++    var reports = {}, names = [];
++    var idPattern = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
++    var pathPattern = /^[a-zA-Z_][a-zA-Z0-9_-]*(\.[a-zA-Z0-9_-]+)*$/;
++    var sourcePattern = /^(managed|repo|audit|workflow)\/[a-zA-Z0-9_-]+(\/[a-zA-Z0-9_-]+)*$/;
++    var forbiddenKey = /^(?:__proto__|prototype|constructor)$/;
++
++    config.reports.forEach(function (report) {
++        if (!report || typeof report.id !== 'string' || !idPattern.test(report.id) ||
++                Object.prototype.hasOwnProperty.call(reports, report.id) ||
++                typeof report.title !== 'string' || !report.title ||
++                typeof report.filename !== 'string' || !/^[a-zA-Z0-9._-]+\.csv$/.test(report.filename) ||
++                typeof report.source !== 'string' || !sourcePattern.test(report.source) ||
++                (report.filter !== undefined && (typeof report.filter !== 'string' || !report.filter)) ||
++                !Array.isArray(report.columns) || !report.columns.length) { invalidConfig(); }
++        report.columns.forEach(function (column) {
++            if (!column || typeof column.header !== 'string' || !column.header ||
++                    (column.path !== undefined) === Object.prototype.hasOwnProperty.call(column, 'value') ||
++                    (column.path !== undefined && (typeof column.path !== 'string' || !pathPattern.test(column.path) ||
++                        column.path.split('.').some(function (key) { return forbiddenKey.test(key); }))) ||
++                    (Object.prototype.hasOwnProperty.call(column, 'value') &&
++                        column.value !== null && ['string', 'number', 'boolean'].indexOf(typeof column.value) < 0)) {
++                invalidConfig();
++            }
++        });
++        reports[report.id] = report;
++        names.push({id:report.id, title:report.title});
++    });
++    if (typeof config.defaultReport !== 'string' ||
++            !Object.prototype.hasOwnProperty.call(reports, config.defaultReport)) { invalidConfig(); }
++
+     var params = request.additionalParameters || {};
+-    if (params.capabilities === 'true') { return {allowed:true}; }
+-    var offset = String(params.offset || '0');
++    if (params.capabilities === 'true') { return {allowed:true, reports:names}; }
++    var id = params.report === undefined ? config.defaultReport : params.report;
++    if (typeof id !== 'string' || !Object.prototype.hasOwnProperty.call(reports, id)) {
++        throw {code:400, message:'Unknown report'};
++    }
++    var report = reports[id];
++    var offset = params.offset === undefined ? '0' : String(params.offset);
+     if (!/^(0|[1-9][0-9]{0,8})$/.test(offset)) { throw {code:400, message:'Invalid offset'}; }
+-    var fields = ['_id','servicePrincipalId','servicePrincipalName','previousOwnerRef','newOwnerId',
+-        'newOwnerUserName','requester','reason','status','createdAt','decidedBy','decidedAt'];
+-    var page = openidm.query('managed/entraOwnerRequest', {
+-        _queryFilter:'true', _pageSize:500, _pagedResultsOffset:Number(offset), _sortKeys:'_id'
++
++    // Explicit projection limits the fields read. No caller-supplied resource or filter.
++    var fields = ['_id'];
++    report.columns.forEach(function (column) {
++        if (column.path !== undefined) {
++            var field = column.path.split('.')[0];
++            if (fields.indexOf(field) < 0) { fields.push(field); }
++        }
++    });
++    var page = openidm.query(report.source, {
++        _queryFilter:report.filter || 'true', _pageSize:500,
++        _pagedResultsOffset:Number(offset), _sortKeys:'_id'
+     }, fields);
++    if (!page || !Array.isArray(page.result)) { throw {code:500, message:'Invalid CSV query response'}; }
++
++    function valueAt(record, path) {
++        var keys = path.split('.'), current = record;
++        for (var i = 0; i < keys.length; i++) {
++            if (current === null || current === undefined) { return ''; }
++            current = current[keys[i]];
++        }
++        if (current === null || current === undefined) { return ''; }
++        return typeof current === 'object' ? JSON.stringify(current) : current;
++    }
+     function cell(value) {
+-        var text = value == null ? '' : String(value);
+-        // Protect spreadsheet users from formulas, including leading whitespace/control characters.
++        var text = value === null || value === undefined ? '' : String(value);
++        // Protect spreadsheet users from formula execution, including leading whitespace.
+         if (/^[\s\u0000-\u001f]*[=+@-]/.test(text) || /^[\t\r\n]/.test(text)) { text = "'" + text; }
+         return '"' + text.replace(/"/g, '""') + '"';
+     }
+-    var header = ['processId','servicePrincipalLocalId','servicePrincipalName','previousOwnerRef','newOwnerLocalId',
+-        'newOwnerUserName','requester','reason','status','createdAt','decidedBy','decidedAt','recordType'];
++    var header = report.columns.map(function (column) { return cell(column.header); }).join(';');
+     var rows = page.result.map(function (record) {
+-        return fields.map(function (field) { return cell(record[field]); }).concat([cell('ownership_assignment')]).join(';');
++        return report.columns.map(function (column) {
++            return cell(column.path !== undefined ? valueAt(record, column.path) : column.value);
++        }).join(';');
+     });
+-    return {header:header.map(cell).join(';'), csv:rows.join('\r\n'),
++    return {report:id, header:header, csv:rows.join('\r\n'),
+         nextOffset:page.result.length === 500 ? Number(offset) + 500 : null,
+-        filename:'governance-ownership-history.csv'};
++        filename:report.filename};
+ }());
+diff --git a/export.py b/export.py
+new file mode 100644
+index 0000000..299e6bf
+--- /dev/null
++++ b/export.py
+@@ -0,0 +1,76 @@
++#!/usr/bin/env python3
++# SPDX-License-Identifier: CDDL-1.1
++"""Download one configured OpenIDM report to a CSV file (Python stdlib only)."""
++import argparse
++import json
++import os
++from pathlib import Path
++import tempfile
++from urllib.parse import urlencode
++from urllib.request import Request, urlopen
++
++
++def export_report(base, username, password, report_id, destination, fetch=urlopen):
++    """Fetch JSON pages; write CSV only when the entire export succeeds."""
++    destination = Path(destination)
++    destination.parent.mkdir(parents=True, exist_ok=True)
++    temporary = None
++    try:
++        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8-sig', newline='',
++                                         prefix='.report-', suffix='.tmp',
++                                         dir=str(destination.parent), delete=False) as output:
++            temporary = Path(output.name)
++            offset, header = 0, None
++            while True:
++                params = urlencode({'report': report_id, 'offset': offset})
++                uri = base.rstrip('/') + '/endpoint/governanceReport?' + params
++                request = Request(uri, headers={
++                    'X-OpenIDM-Username': username,
++                    'X-OpenIDM-Password': password,
++                    'X-OpenIDM-NoSession': 'true',
++                    'X-Requested-With': 'XMLHttpRequest',
++                    'Accept': 'application/json',
++                })
++                with fetch(request, timeout=30) as response:
++                    page = json.load(response)
++                if page.get('report') != report_id or not isinstance(page.get('header'), str):
++                    raise ValueError('Unexpected report schema or ID')
++                if header is None:
++                    header = page['header']
++                    output.write(header + '\r\n')
++                elif page['header'] != header:
++                    raise ValueError('Report schema changed during export')
++                if not isinstance(page.get('csv'), str):
++                    raise ValueError('Missing CSV page')
++                if page['csv']:
++                    output.write(page['csv'] + '\r\n')
++                if 'nextOffset' not in page:
++                    raise ValueError('Missing nextOffset')
++                following = page['nextOffset']
++                if following is None:
++                    break
++                if type(following) is not int or following <= offset:
++                    raise ValueError('Invalid nextOffset')
++                offset = following
++        os.replace(temporary, destination)
++        return destination
++    finally:
++        if temporary is not None and temporary.exists():
++            temporary.unlink()
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--url', default=os.getenv('OPENIDM_URL', 'http://localhost:8081/openidm'))
++    parser.add_argument('--report', required=True, help='Configured report ID')
++    parser.add_argument('--output', required=True, type=Path, help='Destination CSV')
++    args = parser.parse_args()
++    username = os.getenv('OPENIDM_USERNAME', 'openidm-admin')
++    password = os.getenv('OPENIDM_PASSWORD')
++    if not password:
++        parser.error('OPENIDM_PASSWORD environment variable is required')
++    print(export_report(args.url, username, password, args.report, args.output))
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/install.py b/install.py
+index 4c914fc..02549f1 100644
+--- a/install.py
++++ b/install.py
+@@ -1,6 +1,6 @@
+ #!/usr/bin/env python3
+ # SPDX-License-Identifier: CDDL-1.1
+-"""Install the read-only auditor CSV export into the local OpenIDM container."""
++"""Install the config-driven, read-only CSV reports into the local OpenIDM container."""
+ import argparse
+ import datetime
+ import json
+@@ -44,6 +44,10 @@ def main():
+         root + 'conf/endpoint-governanceReport.json': json.dumps({
+             'type':'text/javascript', 'file':'workflow/governanceReport.js'}, indent=2) + '\n'
+     }
++    # Install only when absent; never overwrite auditor-defined report profiles.
++    config_path = root + 'conf/custom-reporting.json'
++    if subprocess.run(['docker','exec',args.container,'test','-e',config_path]).returncode != 0:
++        changes[config_path] = (ASSETS / 'custom-reporting.json').read_text()
+     for ui in ('selfservice', 'admin'):
+         base = root + 'ui/' + ui + '/'
+         nav_path = base + 'extension/templates/common/NavigationTemplate.html'
+@@ -62,7 +66,7 @@ def main():
+             previous[remote] = old
+     print('Files to update:', len(previous))
+     if args.check:
+-        print('Validated endpoint, server-side role check and both navigation extensions; no changes made.')
++        print('Validated endpoint, report config installation, access rule and navigation extensions; no changes made.')
+         return
+     if previous:
+         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+@@ -100,7 +104,8 @@ def main():
+                     data=json.dumps({'name':'Auditor','description':'Read governance CSV reports'}).encode()),timeout=30):
+                 pass
+         print('Auditor role exists. Assign it only to approved users through authzRoles.')
+-    print('CSV extension installed. Reload the UI. Requires openidm-auditor or openidm-admin.')
++    print('CSV reports installed. Reload the UI. Requires openidm-auditor or openidm-admin.')
++    print('Report profiles: ' + config_path + ' (existing configuration is preserved).')
+     if not args.create_role:
+         print('Role provisioning was not requested; use --create-role with OPENIDM_PASSWORD if needed.')
+ 
+diff --git a/tests/live.py b/tests/live.py
+index e3f88f7..ab0a78d 100644
+--- a/tests/live.py
++++ b/tests/live.py
+@@ -48,14 +48,17 @@ try:
+     assert call('endpoint/governanceReport', identities['openidm-authorized'])[0] == 403
+     assert call('endpoint/governanceReport?capabilities=true', identities['openidm-authorized'])[0] == 403
+     auditor = identities['openidm-auditor']
+-    assert call('endpoint/governanceReport?capabilities=true', auditor)[0] == 200
+-    status, report = call('endpoint/governanceReport?offset=0', auditor)
++    cap_status, capabilities = call('endpoint/governanceReport?capabilities=true', auditor)
++    assert cap_status == 200
++    assert any(item['id'] == 'ownership-history' for item in capabilities['reports'])
++    status, report = call('endpoint/governanceReport?report=ownership-history&offset=0', auditor)
+     assert status == 200, ('Auditor export failed', status)
+     assert report['filename'].endswith('.csv')
+     assert report['header'].startswith('"processId";')
+     assert isinstance(report['csv'], str)
+     assert call('managed/entraOwnerRequest?_queryFilter=true', auditor)[0] == 403
+     assert call('endpoint/governanceReport?offset=-1', auditor)[0] == 400
++    assert call('endpoint/governanceReport?report=not-configured', auditor)[0] == 400
+     assert call('endpoint/governanceReport', ADMIN)[0] == 200
+     print('PASS: anonymous 401, ordinary user 403, auditor/admin CSV 200, raw data denied, invalid offset 400')
+     print('CSV payload bytes:', len(report['csv'].encode('utf-8')))
+diff --git a/tests/report.test.cjs b/tests/report.test.cjs
+index ca68dce..e27fd99 100644
+--- a/tests/report.test.cjs
++++ b/tests/report.test.cjs
+@@ -1,13 +1,33 @@
+ const {test} = require('node:test');
+ const assert = require('node:assert/strict');
+ const fs = require('node:fs');
++const path = require('node:path');
+ const vm = require('node:vm');
+-const source = fs.readFileSync(require('node:path').join(__dirname, '../assets/governanceReport.js'), 'utf8');
+-function run({roles=['openidm-auditor'], params={}, method='read', records=[]}={}) {
++const source = fs.readFileSync(path.join(__dirname, '../assets/governanceReport.js'), 'utf8');
++const defaultConfig = JSON.parse(fs.readFileSync(path.join(__dirname, '../assets/custom-reporting.json'), 'utf8'));
++function run({roles=['openidm-auditor'], params={}, method='read', records=[], config=defaultConfig}={}) {
+     const calls=[];
++    const reads=[];
+     const result=vm.runInNewContext(source, {request:{method,additionalParameters:params},
+-        context:{security:{authorization:{roles}}}, openidm:{query(...args){calls.push(args);return {result:records};}}});
+-    return {result,calls};
++        context:{security:{authorization:{roles}}}, openidm:{
++            read(id){reads.push(id); return config;},
++            query(...args){calls.push(args);return {result:records};}
++        }});
++    return {result,calls,reads};
++}
++function secondReport(){
++    const config = JSON.parse(JSON.stringify(defaultConfig));
++    config.reports.push({
++        id:'approval-tasks', title:'Akceptacje', filename:'approval-tasks.csv',
++        source:'managed/approvalRecord', filter:'/status eq "closed"',
++        columns:[
++            {header:'Process',path:'process.id'},
++            {header:'Approver',path:'approval.actor.name'},
++            {header:'Outcome',path:'status'},
++            {header:'Type',value:'approval'}
++        ]
++    });
++    return config;
+ }
+ test('ordinary and anonymous users cannot read report or probe capabilities',()=>{
+     for (const roles of [[],['openidm-authorized']]) {
+@@ -15,21 +35,65 @@ test('ordinary and anonymous users cannot read report or probe capabilities',()=
+         assert.throws(()=>run({roles,params:{capabilities:'true'}}), e=>e.code===403);
+     }
+ });
+-test('capabilities probe does not read records; writes rejected',()=>{
++test('capabilities lists configured report IDs without querying records; writes rejected',()=>{
+     for(const roles of [['openidm-auditor'],['openidm-admin']]) {
+-        assert.equal(run({roles,params:{capabilities:'true'}}).calls.length,0);
++        const {result,calls,reads}=run({roles,params:{capabilities:'true'},config:secondReport()});
++        assert.equal(calls.length,0);
++        assert.deepEqual(JSON.parse(JSON.stringify(result.reports)), [
++            {id:'ownership-history',title:'Historia zmian ownershipu'},
++            {id:'approval-tasks',title:'Akceptacje'}
++        ]);
++        assert.deepEqual(reads,['config/custom/reporting']);
+     }
+     assert.throws(()=>run({method:'create'}),e=>e.code===405);
+ });
+-test('CSV preserves quotes, semicolons, newlines, Unicode and blocks formulas',()=>{
+-    const {result,calls}=run({records:[{_id:'p1',servicePrincipalName:'Żółć; "app"\nname',reason:'  =HYPERLINK("bad")',status:'accepted',password:'secret',decidedAt:'2026-11-18T10:00:00Z'}]});
++test('default report retains old ownership CSV columns and prevents formula injection',()=>{
++    const {result,calls}=run({records:[{_id:'p1',servicePrincipalName:'Żółć; "app"\nname',
++        reason:'  =HYPERLINK("bad")',status:'accepted',password:'secret'}]});
++    assert.ok(result.header.startsWith('"processId";'));
++    assert.equal(result.filename,'governance-ownership-history.csv');
+     assert.ok(result.csv.includes('"Żółć; ""app""\nname"'));
+     assert.ok(result.csv.includes('"\'  =HYPERLINK(""bad"")"'));
+     assert.ok(!result.csv.includes('secret'));
+     assert.ok(result.csv.includes('ownership_assignment'));
+     assert.equal(result.nextOffset,null);
++    assert.equal(calls[0][0],'managed/entraOwnerRequest');
+     assert.equal(calls[0][1]._pageSize,500);
+ });
++test('another process uses its configured source, filter, columns, nested fields and constants',()=>{
++    const {result,calls}=run({config:secondReport(),params:{report:'approval-tasks'},records:[{
++        process:{id:'abc'},approval:{actor:{name:'John'}},status:'closed',unrelated:'should not export'
++    }]});
++    assert.equal(result.report,'approval-tasks');
++    assert.equal(result.filename,'approval-tasks.csv');
++    assert.equal(result.header,'"Process";"Approver";"Outcome";"Type"');
++    assert.equal(result.csv,'"abc";"John";"closed";"approval"');
++    assert.equal(calls[0][0],'managed/approvalRecord');
++    assert.equal(calls[0][1]._queryFilter,'/status eq "closed"');
++    assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])),['_id','process','approval','status']);
++});
++test('caller cannot override resource or filter and cannot select unknown report',()=>{
++    const {calls}=run({config:secondReport(),params:{report:'approval-tasks',
++        source:'config',_queryFilter:'true',fields:'password'}});
++    assert.equal(calls[0][0],'managed/approvalRecord');
++    assert.equal(calls[0][1]._queryFilter,'/status eq "closed"');
++    assert.ok(!calls[0][2].includes('password'));
++    for (const report of ['none','__proto__','constructor',42]) {
++        assert.throws(()=>run({params:{report}}),e=>e.code===400);
++    }
++});
++test('missing, null and structured values export predictably',()=>{
++    const config=secondReport();
++    config.reports[1].columns=[
++        {header:'missing',path:'missing.foo'},
++        {header:'null',path:'nil'},
++        {header:'nested',path:'payload'}
++    ];
++    const {result}=run({config,params:{report:'approval-tasks'},records:[
++        {nil:null,payload:['a','b']}
++    ]});
++    assert.equal(result.csv,'"";"";"[""a"",""b""]"');
++});
+ test('paging continues after a full page and validates offsets',()=>{
+     assert.equal(run({records:Array(500).fill({_id:'x'})}).result.nextOffset,500);
+     assert.equal(run({params:{offset:'500'}}).calls[0][1]._pagedResultsOffset,500);
+@@ -37,3 +101,19 @@ test('paging continues after a full page and validates offsets',()=>{
+         assert.throws(()=>run({params:{offset}}),e=>e.code===400);
+     }
+ });
++test('invalid admin configuration fails closed before any query',()=>{
++    for (const change of [
++        config=>{config.reports[0].source='config/custom/reporting';},
++        config=>{config.reports[0].columns[0].path='__proto__.polluted';},
++        config=>{config.reports[0].columns[0]={header:'raw',path:'password',value:'leak'};},
++        config=>{config.reports[0].filename='../report.csv';},
++        config=>{config.reports.push({...config.reports[0]});},
++        config=>{config.defaultReport='missing';}
++    ]) {
++        const config=JSON.parse(JSON.stringify(defaultConfig));
++        change(config);
++        let queryCalled=false;
++        assert.throws(()=>run({config}),e=>e.code===500);
++        assert.equal(queryCalled,false);
++    }
++});
+diff --git a/tests/test_export.py b/tests/test_export.py
+new file mode 100644
+index 0000000..ff4f2b7
+--- /dev/null
++++ b/tests/test_export.py
+@@ -0,0 +1,53 @@
++"""Offline tests for streaming CLI CSV export and atomic rollback."""
++import io
++import json
++from pathlib import Path
++import tempfile
++import unittest
++from urllib.parse import parse_qs, urlsplit
++from unittest.mock import Mock
++
++from export import export_report
++
++
++class ExportTest(unittest.TestCase):
++    def test_two_pages_write_one_csv_and_pass_report_id(self):
++        requests = []
++        def fetch(request, timeout):
++            requests.append((request, timeout))
++            offset = parse_qs(urlsplit(request.full_url).query)['offset'][0]
++            payload = {
++                'report': 'approvals', 'header': '"Process";"Actor"',
++                'csv': '"p1";"a"' if offset == '0' else '"p2";"b"',
++                'nextOffset': 500 if offset == '0' else None,
++            }
++            return io.BytesIO(json.dumps(payload).encode())
++        with tempfile.TemporaryDirectory() as temp:
++            target = Path(temp) / 'report.csv'
++            export_report('http://localhost/openidm', 'auditor', 'not-logged', 'approvals', target, fetch)
++            self.assertEqual(target.read_bytes().decode('utf-8-sig'),
++                             '"Process";"Actor"\r\n"p1";"a"\r\n"p2";"b"\r\n')
++            self.assertEqual(len(requests), 2)
++            self.assertIn('report=approvals', requests[0][0].full_url)
++            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
++
++    def test_partial_failed_export_does_not_overwrite_existing_report(self):
++        count = 0
++        def fetch(request, timeout):
++            nonlocal count
++            count += 1
++            return io.BytesIO(json.dumps({
++                'report': 'a', 'header': '"h"' if count == 1 else '"changed"',
++                'csv': '"x"', 'nextOffset': 500 if count == 1 else None,
++            }).encode())
++        with tempfile.TemporaryDirectory() as temp:
++            target = Path(temp) / 'report.csv'
++            target.write_text('previous')
++            with self.assertRaisesRegex(ValueError, 'schema changed'):
++                export_report('http://localhost/openidm', 'u', 'p', 'a', target, fetch)
++            self.assertEqual(target.read_text(), 'previous')
++            self.assertEqual(sorted(item.name for item in Path(temp).iterdir()), ['report.csv'])
++
++
++if __name__ == '__main__':
++    unittest.main()
