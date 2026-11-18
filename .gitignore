@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+
+# Local environments and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+.venv/
+venv/
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+
+# Local test output and reports (may contain personal data)
+.pytest_cache/
+coverage/
+*.log
+reports/
+exports/
+gitleaks-report.*
