@@ -13,7 +13,6 @@
     "types": []
   },
   "include": [
-    "src/reportEndpoint.ts",
     "src/reportUI.ts",
     "src/historyView.ts"
   ]

@@ -6,14 +6,14 @@ const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../assets/reportEndpoint.js'), 'utf8');
 const shippedConfig = JSON.parse(fs.readFileSync(path.join(__dirname, '../assets/custom-reporting.json'), 'utf8'));
 const defaultConfig = {...shippedConfig, defaultReport:'ownership-history', reports:[shippedConfig.reports[0]]};
-function run({roles=['openidm-auditor'], params={}, method='read', records=[], config=defaultConfig, wrapped=false, definitions=[], users=[], principals=[]}={}) {
+function run({roles=['openidm-auditor'], params={}, method='read', account={}, records=[], config=defaultConfig, wrapped=false, definitions=[], users=[], principals=[], tasks=[]}={}) {
     const wrap = value => wrapped ? {toString(){return JSON.stringify(value);}} : value;
     const calls=[];
     const reads=[];
     const result=vm.runInNewContext(source, {request:{method,additionalParameters:params},
-        context:{security:{authorization:{roles}}}, openidm:{
+        context:{security:{authorization:{roles,...account}}}, openidm:{
             read(id){reads.push(id); return wrap(config);},
-            query(...args){calls.push(args);return wrap({result:args[0] === 'workflow/processdefinition' ? definitions : (args[0] === 'managed/user' ? users : (args[0] === 'managed/entraServicePrincipal' ? principals : records))});}
+            query(...args){calls.push(args);if(args[0]==='workflow/taskinstance') return wrap({result:tasks.filter(task=>task.processInstanceId===args[1].processInstanceId)});return wrap({result:args[0] === 'workflow/processdefinition' ? definitions : (args[0] === 'managed/user' ? users : (args[0] === 'managed/entraServicePrincipal' ? principals : records))});}
         }});
     return {result,calls,reads};
 }
@@ -279,4 +279,34 @@ test('unknown fields, invalid dictionaries and malformed date ranges fail closed
         assert.throws(()=>run({config:shippedConfig,params:{filters:JSON.stringify(filters)}}),e=>e.code===400);
     }
     assert.throws(()=>run({config:shippedConfig,params:{pageSize:'100000'}}),e=>e.code===400);
+});
+
+test('interactive history returns task IDs only for processes with a unique current task',()=>{
+    const {result,calls}=run({config:shippedConfig,params:{report:'workflow-history',pageSize:'50',taskLinks:'true'},
+        records:[{_id:'p1',status:'pending'},{_id:'p2',status:'accepted'},{_id:'p3',status:'pending'}],
+        tasks:[{_id:'t1',processInstanceId:'p1'},{_id:'t2',processInstanceId:'p3'},{_id:'t3',processInstanceId:'p3'}]});
+    assert.deepEqual(Array.from(result.taskIds),['t1',null,null]);
+    assert.deepEqual(calls.filter(call=>call[0]==='workflow/taskinstance').map(call=>call[1].processInstanceId),['p1','p2','p3']);
+});
+
+test('My Tasks applies an immutable managed reviewer scope to table and export queries',()=>{
+    const personal = {roles:['openidm-authorized'], account:{component:'managed/user', id:'my-account'},
+        config:shippedConfig};
+    for (const pageSize of [50, 500]) {
+        const {result,calls} = run({...personal, params:{myTasks:'true', report:'workflow-history',
+            reviewer:'other-account', filters:'{"status":"accepted"}', pageSize, taskLinks:'true'}});
+        assert.equal(result.report, 'workflow-history');
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0][0], 'managed/entraOwnerRequest');
+        assert.equal(calls[0][1]._queryFilter, '((true) and /newOwnerId eq "my-account") and (/status eq "accepted")');
+    }
+    const catalog = run({...personal, params:{myTasks:'true', capabilities:'true', workflows:'true'}});
+    assert.equal(catalog.calls.length, 0);
+    assert.equal(catalog.result.workflows.length, 0);
+    assert.equal(catalog.result.columns.find(column=>column.key==='reviewer').filterType, undefined);
+    assert.throws(()=>run({...personal, params:{myTasks:'true', report:'ownership-history'}}), e=>e.code===403);
+    assert.throws(()=>run({...personal, params:{myTasks:'true', dictionary:'people'}}), e=>e.code===403);
+    assert.throws(()=>run({...personal, params:{myTasks:'true', filters:'{"reviewer":"other-account"}'}}), e=>e.code===400);
+    assert.throws(()=>run({...personal, account:{id:'my-account', component:'internal/user'}, params:{myTasks:'true'}}), e=>e.code===403);
+    assert.throws(()=>run({...personal, roles:[], params:{myTasks:'true'}}), e=>e.code===403);
 });

@@ -3,6 +3,8 @@
 """Install the config-driven, read-only CSV reports into the local OpenIDM container."""
 import argparse
 import datetime
+import hashlib
+import re
 import json
 import os
 from pathlib import Path
@@ -14,6 +16,46 @@ import urllib.request
 ASSETS = Path(__file__).resolve().parent / 'assets'
 MODULE = 'org/forgerock/openidm/ui/common/workflow/GovernanceReport'
 MARKER = '<!-- Governance CSV export -->'
+WORKFLOW_UI = MODULE.rsplit('/', 1)[0]
+MY_TASKS_MARKER = '<!-- Reporting My Tasks -->'
+REPORT_STYLESHEET = 'css/workflow-history.css'
+
+
+def register_my_tasks(html):
+    html = re.sub(r'<!-- Reporting My Tasks -->\n<script>[^\n]*</script>\n', '', html)
+    anchor = '<script data-main='
+    if anchor not in html:
+        raise ValueError('Unsupported UI index: RequireJS startup not found')
+    loader = (
+        MY_TASKS_MARKER + '\n<script>(function (startup) { '
+        'var config = startup.config || (startup.config = {}); '
+        f'var reporting = config[{json.dumps(MODULE)}] || (config[{json.dumps(MODULE)}] = {{}}); '
+        'reporting.myTasks = true; '
+        '}(require));</script>\n'
+    )
+    return html.replace(anchor, loader + anchor, 1)
+
+
+def version_reporting_assets(html, version):
+    def replace(match):
+        value = re.sub(r'&reporting=[^&"\']*', '', match.group(2))
+        return match.group(1) + value + '&reporting=' + version + match.group(3)
+    updated, count = re.subn(r'(urlArgs\s*:\s*["\'])([^"\']*)(["\'])', replace, html)
+    if count != 1:
+        raise ValueError('Expected exactly one RequireJS urlArgs in UI index.html')
+    return updated
+
+
+def link_reporting_stylesheet(html, version):
+    link = f'<link rel="stylesheet" href="{REPORT_STYLESHEET}?reporting={version}">'
+    existing = r'<link rel="stylesheet" href="' + re.escape(REPORT_STYLESHEET) + r'\?reporting=[^"]*">'
+    updated, count = re.subn(existing, link, html)
+    if count:
+        return updated
+    updated, count = re.subn(r'(?im)^([ \t]*)(</head>)', r'\1' + link + r'\n\1\2', html, count=1)
+    if count != 1:
+        raise ValueError('Unsupported UI index: closing head tag not found')
+    return updated
 
 
 def merge_report_config(existing, defaults):
@@ -58,6 +100,13 @@ def main():
         return subprocess.check_output(['docker', *cmd])
     if (args.create_role or args.reload) and not os.environ.get('OPENIDM_PASSWORD'):
         parser.error('--create-role and --reload require OPENIDM_PASSWORD')
+    generated_assets = (
+        'historyApp.js', 'historyApp.css', 'historyApp.LICENSE.txt',
+        'historyView.js', 'reportEndpoint.js', 'reportUI.js',
+    )
+    missing_assets = [name for name in generated_assets if not (ASSETS / name).is_file()]
+    if missing_assets:
+        parser.error(f'Missing build assets: {", ".join(missing_assets)}. Run npm ci && npm run build before installing.')
     root = '/opt/openidm/'
     access_path = root + 'script/access.js'
     access = docker('exec', args.container, 'cat', access_path).decode()
@@ -68,6 +117,12 @@ def main():
         access += '\n' + rule_marker + '\nhttpAccessConfig.configs.push(' + json.dumps({
             'pattern':'endpoint/governanceReport', 'roles':'openidm-auditor,openidm-admin',
             'methods':'read', 'actions':''}) + ');\n'
+    personal_marker = '// Personal workflow reporting access'
+    if personal_marker not in access:
+        access += '\n' + personal_marker + '\nhttpAccessConfig.configs.push(' + json.dumps({
+            'pattern':'endpoint/governanceReport', 'roles':'openidm-authorized',
+            'methods':'read', 'actions':'',
+            'customAuthz':"request.additionalParameters.myTasks === 'true'"}) + ');\n'
     changes = {
         access_path: access,
         root + 'script/workflow/governanceReport.js': (ASSETS / 'reportEndpoint.js').read_text(),
@@ -117,7 +172,13 @@ def main():
             if anchor not in index:
                 raise ValueError('Unsupported UI index: RequireJS startup not found')
             index = index.replace(anchor, bootstrap + anchor, 1)
-        changes[index_path] = index
+        versioned_assets = ['reportUI.js', 'historyView.js', 'historyApp.js', 'historyApp.css', 'WorkflowHistory.html']
+        if ui == 'selfservice':
+            index = register_my_tasks(index)
+            changes[base + 'extension/' + WORKFLOW_UI + '/ReportingMyTasks.js'] = None
+        version = hashlib.sha256(b''.join((ASSETS / name).read_bytes() for name in versioned_assets)).hexdigest()[:16]
+        changes[index_path] = link_reporting_stylesheet(version_reporting_assets(index, version), version)
+        changes[base + 'extension/' + REPORT_STYLESHEET] = (ASSETS / 'historyApp.css').read_text()
         # Remove the loader from the superseded footer registration if it exists.
         footer_path = base + 'extension/templates/common/FooterTemplate.html'
         result = subprocess.run(['docker','exec',args.container,'cat',footer_path],capture_output=True)
@@ -127,9 +188,12 @@ def main():
             changes[footer_path] = footer.replace(loader, '')
         changes[base + 'extension/' + MODULE + '.js'] = (ASSETS / 'reportUI.js').read_text()
         changes[base + 'extension/' + MODULE.rsplit('/', 1)[0] + '/WorkflowHistory.js'] = (ASSETS / 'historyView.js').read_text()
-        changes[base + 'extension/' + MODULE.rsplit('/', 1)[0] + '/WorkflowHistoryReact.js'] = (ASSETS / 'historyApp.js').read_text()
-        changes[base + 'extension/' + MODULE.rsplit('/', 1)[0] + '/WorkflowHistoryReact.LICENSE.txt'] = (ASSETS / 'historyApp.LICENSE.txt').read_text()
+        changes[base + 'extension/' + MODULE.rsplit('/', 1)[0] + '/WorkflowHistoryApp.js'] = (ASSETS / 'historyApp.js').read_text()
+        changes[base + 'extension/' + MODULE.rsplit('/', 1)[0] + '/WorkflowHistoryApp.LICENSE.txt'] = (ASSETS / 'historyApp.LICENSE.txt').read_text()
         changes[base + 'extension/templates/reports/WorkflowHistory.html'] = (ASSETS / 'WorkflowHistory.html').read_text()
+        # Old React AMD modules are obsolete after the Preact migration.
+        for legacy in ('WorkflowHistoryReact.js', 'WorkflowHistoryReact.LICENSE.txt'):
+            changes[base + 'extension/' + MODULE.rsplit('/', 1)[0] + '/' + legacy] = None
     previous = {}
     for remote, content in changes.items():
         result = subprocess.run(['docker','exec',args.container,'cat',remote],capture_output=True)
@@ -158,8 +222,12 @@ def main():
             (local / 'manifest.json').write_text(json.dumps(manifest,indent=2))
             docker('cp',str(local / 'manifest.json'),args.container + ':' + backup + '/manifest.json')
             for index, remote in enumerate(previous):
+                content = changes[remote]
+                if content is None:
+                    docker('exec', args.container, 'rm', '-f', remote)
+                    continue
                 file = local / str(index)
-                file.write_text(changes[remote])
+                file.write_text(content)
                 docker('exec',args.container,'mkdir','-p',str(Path(remote).parent))
                 docker('cp',str(file),args.container + ':' + remote)
         print('Backup:',backup)
@@ -187,7 +255,7 @@ def main():
                     data=json.dumps({'name':'Auditor','description':'Read governance CSV reports'}).encode()),timeout=30):
                 pass
         print('Auditor role exists. Assign it only to approved users through authzRoles.')
-    print('Report tables and CSV exports installed. Reload the UI. Requires openidm-auditor or openidm-admin.')
+    print('Workflow History and Self Service My Tasks installed. Reload the UI.')
     print('Report profiles: ' + config_path + ' (existing configuration is preserved).')
     if not args.create_role:
         print('Role provisioning was not requested; use --create-role with OPENIDM_PASSWORD if needed.')

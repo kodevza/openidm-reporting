@@ -1,19 +1,28 @@
 // SPDX-License-Identifier: CDDL-1.1
-// The host view owns routing/templates; React owns everything inside the report body.
-define(['jquery','org/forgerock/commons/ui/common/main/AbstractView',
+// The host view owns routing/templates; Preact owns everything inside the report body.
+define(['org/forgerock/commons/ui/common/main/AbstractView',
     'org/forgerock/openidm/ui/common/delegates/ResourceDelegate',
-    'org/forgerock/openidm/ui/common/workflow/WorkflowHistoryReact'], function ($: any, AbstractView: any, delegate: any, app: any) {
+    'org/forgerock/openidm/ui/common/workflow/WorkflowHistoryApp'], function (AbstractView: any, delegate: any, app: any) {
     var cleanup: (() => void) | null = null, generation = 0;
     return new (AbstractView.extend({
         template:'templates/reports/WorkflowHistory.html',
         render:function (this: any, args: any, callback: any) {
             var token = ++generation;
+            var myTasks = window.location.hash === '#reports/my-tasks/';
             if (cleanup) { cleanup(); cleanup = null; }
             this.parentRender(function () {
                 if (token !== generation) { return; }
                 var element = document.getElementById('workflow-history-body');
                 if (!element) { return; }
-                var unmount = app.mount(element, function (uri: string) { return Promise.resolve(delegate.getResource(uri)); });
+                if (myTasks) {
+                    var title = document.getElementById('workflow-history-title');
+                    var description = title && title.nextElementSibling;
+                    if (title) { title.textContent = 'My Tasks'; }
+                    if (description) { description.textContent = 'Review workflows assigned to you.'; }
+                }
+                var unmount = app.mount(element, function (uri: string) {
+                    return Promise.resolve(delegate.getResource(myTasks ? uri + '&myTasks=true' : uri));
+                }, myTasks);
                 var observer = new MutationObserver(function () {
                     if (!document.documentElement.contains(element)) { dispose(); }
                 });

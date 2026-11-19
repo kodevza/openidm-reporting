@@ -28,3 +28,11 @@ exports/
 gitleaks-report.*
 
 node_modules/
+
+# Generated deployment assets
+/assets/historyApp.LICENSE.txt
+/assets/historyApp.css
+/assets/historyApp.js
+/assets/historyView.js
+/assets/reportEndpoint.js
+/assets/reportUI.js

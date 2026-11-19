@@ -5,19 +5,30 @@ configuration, UI, installer and tests live in this repository. The installer us
 supported custom endpoints and navigation extensions; it does not patch OpenIDM
 Java sources, bundled UI JavaScript or default templates.
 
+## My Tasks in Self Service
+
+**My Tasks** is a Self Service navigation tab for signed-in managed users.
+It uses the Workflow History table, with the same columns, paging and CSV
+export. The server filters every page and export to the current reviewer's
+local managed user ID, using the reviewer column's configured
+`presentation.localIdPath`. It includes records in all statuses for that
+reviewer. The dashboard's task form remains available from the OpenIDM
+dashboard. My Tasks does not expose the directory of people or the global
+workflow definition catalog.
+
 ## Workflow history
 
 **Workflow History** opens a full page in the main content area of both Admin
 and Self Service. Its **Workflow** dropdown lists the latest definition of each
 workflow available in OpenIDM, including workflows with no saved history. Select
-a workflow to filter its history, or choose **All workflows**. **Download CSV**
+a workflow to filter its history, or use the default **All workflows** selection. **Download CSV**
 exports the complete result for that selection. The downloaded CSV begins with
 **Selected Workflow** (name) and **Workflow Key** metadata rows, followed by the
 column header and records. **All workflows** is explicitly recorded for combined
 exports, including exports with no matching records. The table
 and CSV use the same server-side projection. Only `openidm-auditor` and
 `openidm-admin` can access either representation. All auditors can access all
-configured reports; ordinary users cannot access the reporting endpoint.
+configured reports. Managed users can access only the My Tasks view of this endpoint.
 
 The default `workflow-history` report uses a common contract rather than
 service-principal-specific columns:
@@ -55,7 +66,12 @@ update the persisted request status automatically.
 
 ## Server-side column filters
 
-The page offers a **Column filters** panel. Filters are ANDed with the selected
+Each filterable column has a filter icon in its header. Select the icon to open
+or close the controls directly below that header. Active filters
+remain visible as individually removable buttons above the table, even when the
+controls are collapsed or their column is hidden. Hidden-column filters are
+explicitly marked; **Clear filters** removes all active filters. To filter a
+hidden column, enable it using **Configure columns** first. Filters are ANDed with the selected
 workflow and administrator-configured source filter. They apply to the entire
 collection before sorting/paging; the browser never downloads the history to
 filter it locally. The table requests 50 rows (the backend reads at most 51 to
@@ -144,11 +160,20 @@ configuration can select these paths. User lookups project names and Entra IDs
 only and are cached within the report page. The API's `rows` and CSV contain
 resolved labels, `rawRows` retain the original projected identifiers, and `links`
 contains the corresponding portal targets or null. Tooltips preserve original
-identities. UI values are rendered as text and only fixed Entra portal links are
-allowed.
+identities. UI values are rendered as text. **Process ID** links to the OpenIDM Admin process instance. **Status** links
+to the task instance when the process has exactly one active task. Completed
+processes and processes with multiple active tasks show status as text. The
+workflow views require the viewer’s existing Admin permissions.
 
 Portal routes follow Microsoft's [MSIdentityTools report exporter](https://github.com/AzureAD/MSIdentityTools/blob/main/src/Export-MsIdAppConsentGrantReport.ps1),
 with the [tenant-specific admin center URL](https://learn.microsoft.com/en-us/entra/external-id/redemption-experience#redemption-process-through-a-direct-link).
+
+People filters open a single dropdown with search inside the menu. Search uses
+server-side people lookup; selecting a result applies its stable ID and keeps its
+name on the closed control. Arrow keys move between options, Enter selects, and
+Escape closes the menu. The menu supports additional result pages. Table columns
+use explicit widths so opening filters does not stretch individual columns;
+narrow screens scroll the table horizontally.
 
 ## Column preferences
 
@@ -175,40 +200,61 @@ presentation preference, not a field-level authorization boundary.
 
 ```sh
 npm ci
+npm run lint
 npm run typecheck
-npm test
+npm test                    # Includes build of the AMD UI bundle
 python3 -m unittest discover -s tests -p 'test_*.py'
 python3 -m py_compile install.py export.py tests/live.py
 ```
 
-`src/reportEndpoint.ts`, `src/reportUI.ts` and the small `src/historyView.ts`
-host adapter compile in strict mode to ES5 JavaScript. The endpoint remains
-compatible with OpenIDM's scripting engine.
+ESLint checks the TypeScript sources, JavaScript build scripts, and Node tests.
+It skips generated files in `assets/`. Run `npm run lint:fix` to apply supported
+automatic fixes. Lint errors return a nonzero exit code. Explicit `any` in the
+OpenIDM and AMD scripts is reported as a warning.
 
-`src/react/` is a standalone **React + TypeScript + TanStack React Table 9**
-application. TanStack owns column filter state, visibility, headers/cells and
-manual pagination. Filtering/pagination stay on the server. The app uses the
-host's existing visual styles and occupies the full-width report body.
+Git ignores the generated deployment files in `assets/`. Run `npm ci` and
+`npm run build` after a fresh checkout before running the OpenIDM installer.
 
-`build-react.mjs` bundles React, React DOM and TanStack into the scoped
-`assets/historyApp.js` AMD module (ES2020, for modern browsers). It does not depend
-on or replace OpenIDM's bundled React version. Third-party license notices are
-included in `assets/historyApp.LICENSE.txt`. The host mounts one React root on
-entry and unmounts it when the view DOM is removed; effects ignore late responses
-and an in-progress export is canceled when navigating away. The navigation route,
-authorization, custom endpoint and repository-default columns are unchanged.
+The build uses `tsconfig.report.json` to compile `src/reportingApi/` and
+`src/reportEndpoint.ts` into a single ES5 script at `assets/reportEndpoint.js`.
+The endpoint handles authorization and request routing. The reporting modules
+validate configuration, build filters, fetch records and render the response.
+The `src/reportUI.ts` and `src/historyView.ts` adapters also compile to ES5.
 
-Edit TypeScript/TSX and run `npm run build` before installation. Generated assets
-are versioned so the installed host needs neither Node nor a compiler. Tests use
-React Testing Library with the actual TanStack adapter, cover the host mounting
-lifecycle, and check CSV metadata plus filtered paging.
+`src/ui/` is a standalone **Preact 10 + TypeScript + native TanStack Preact Table 9**
+view. The workflow history table, filters, pagination and CSV export live in
+`src/ui/history/`. The picker and its people directory client live in
+`src/ui/peoplePicker/`. It does not use `preact/compat`, React, or React DOM. TanStack still handles
+column filter state, visibility, headers/cells and manual pagination. Server-side
+filtering and paging, the CSV endpoint, authorization, route and default columns
+have not changed. Text inputs use native `onInput` events for Preact (rather than
+React's synthetic `onChange` behavior).
 
-Before committing, install pre-commit and Go (for the pinned Gitleaks hook), then:
+`build-ui.mjs` bundles Preact and TanStack into `assets/historyApp.js` as an
+ES2020 AMD module loaded by a **three-dependency legacy view adapter**. The
+precompiled bundle lives in an OpenIDM extension, not in the platform UI source.
+The host mounts only inside the workflow history body and unmounts on navigation;
+late requests are ignored and an ongoing export is canceled on unmount.
+
+`npm run build` generates the AMD bundle, `assets/historyApp.LICENSE.txt`,
+and `assets/historyApp.css` from the component stylesheets. The installer deploys
+them as `WorkflowHistoryApp.js`, `WorkflowHistoryApp.LICENSE.txt`, and
+`css/workflow-history.css` in both UI extensions. It links the stylesheet from
+each UI index with a content-based version and backs up/removes the
+obsolete `WorkflowHistoryReact.js` and `.LICENSE.txt` files, when present.
+The installed OpenIDM server does not need Node. Tests use Preact's own test
+utilities plus DOM Testing Library, not React Testing Library.
+
+Install pre-commit and Go for the pinned Gitleaks hook, then set up both hooks:
 
 ```sh
+npm ci
 pre-commit install --install-hooks
-pre-commit run gitleaks --all-files
+pre-commit run eslint --all-files
 ```
+
+On each commit, Gitleaks scans staged changes for secrets and ESLint checks
+staged source files with the project's ESLint configuration.
 
 Keep credentials in environment variables or ignored local `.env` files. Local
 exports and private key files are ignored.
@@ -221,6 +267,8 @@ First update the workflow schema and definition from the companion projects:
 cd ../openidm
 python3 scripts/install-workflow.py
 cd ../openidm-reporting
+npm ci
+npm run build
 python3 install.py --check --sync-defaults --install-indexes
 OPENIDM_PASSWORD='...' python3 install.py --sync-defaults --install-indexes --reload
 ```

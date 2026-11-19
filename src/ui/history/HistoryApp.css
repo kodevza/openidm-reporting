@@ -1,0 +1,75 @@
+/* SPDX-License-Identifier: CDDL-1.1 */
+.workflow-history-preact .history-toolbar {
+  margin: 0;
+  padding: 15px;
+  border-bottom: 1px solid #ddd;
+}
+
+.workflow-history-preact .history-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workflow-history-preact .history-actions-with-workflow {
+  padding-top: 25px;
+}
+
+.workflow-history-preact .history-active-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 15px;
+}
+
+.workflow-history-preact .history-column-choice {
+  margin: 6px 18px 6px 0;
+}
+
+.workflow-history-preact .history-status {
+  padding: 10px 15px;
+  margin: 0;
+}
+
+.workflow-history-preact .history-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: var(--history-table-min-width);
+}
+
+.workflow-history-preact .history-table col {
+  width: var(--history-column-width);
+}
+
+.workflow-history-preact .history-table thead th {
+  vertical-align: top;
+}
+
+.workflow-history-preact .history-cell {
+  overflow-wrap: anywhere;
+}
+
+.workflow-history-preact .history-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+}
+
+.workflow-history-preact .history-filter-toggle {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.workflow-history-preact .history-column-filter {
+  margin-top: 6px;
+  font-weight: normal;
+}
+
+.workflow-history-preact .history-pagination {
+  padding: 15px;
+  border-top: 1px solid #ddd;
+}

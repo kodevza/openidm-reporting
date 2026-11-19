@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": null,
+    "outFile": "assets/reportEndpoint.js"
+  },
+  "files": [
+    "src/reportingApi/runtime.ts",
+    "src/reportingApi/config.ts",
+    "src/reportingApi/lookups.ts",
+    "src/reportingApi/filters.ts",
+    "src/reportingApi/query.ts",
+    "src/reportingApi/entraLinks.ts",
+    "src/reportingApi/render.ts",
+    "src/reportEndpoint.ts"
+  ],
+  "include": []
+}
