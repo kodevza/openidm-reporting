@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: CDDL-1.1
-"""Install the config-driven, read-only CSV reports into the local OpenIDM container."""
+"""Install the reporting module in the local Docker proof of concept (PoC).
+
+IMPORTANT: Do not use this installer in production. Create a separate
+installation script tailored to your production OpenIDM deployment.
+"""
 import argparse
 import datetime
 import hashlib
@@ -70,25 +74,9 @@ def merge_report_config(existing, defaults):
     return result
 
 
-def merge_history_indexes(existing, additions):
-    import copy
-    result = copy.deepcopy(existing)
-    classes = result['dbStructure']['orientdbClass']
-    for name, indexes in additions.items():
-        if name not in classes:
-            raise ValueError('Missing workflow history class: ' + name)
-        current = classes[name].setdefault('index', [])
-        for index in indexes:
-            keys = index.get('propertyNames', [index.get('propertyName')])
-            if not any(item.get('propertyNames', [item.get('propertyName')]) == keys for item in current):
-                current.append(copy.deepcopy(index))
-    return result
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--container', default='openidm')
-    parser.add_argument('--install-indexes', action='store_true', help='Merge reporting indexes into the existing OrientDB configuration')
     parser.add_argument('--reload', action='store_true', help='Compile the updated endpoint immediately using OPENIDM_PASSWORD')
     parser.add_argument('--sync-defaults', action='store_true', help='Apply the repository workflow-history profile, including default column visibility')
     parser.add_argument('--check', action='store_true')
@@ -129,12 +117,6 @@ def main():
         root + 'conf/endpoint-governanceReport.json': json.dumps({
             'type':'text/javascript', 'file':'workflow/governanceReport.js'}, indent=2) + '\n'
     }
-    if args.install_indexes:
-        repo_path = root + 'conf/repo.orientdb.json'
-        existing_repo = json.loads(docker('exec', args.container, 'cat', repo_path))
-        merged_repo = merge_history_indexes(existing_repo, json.loads((ASSETS / 'history-indexes.json').read_text()))
-        if merged_repo != existing_repo:
-            changes[repo_path] = json.dumps(merged_repo, indent=2) + '\n'
     # Add a missing built-in profile while preserving administrator-defined reports.
     config_path = root + 'conf/custom-reporting.json'
     defaults = json.loads((ASSETS / 'custom-reporting.json').read_text())
