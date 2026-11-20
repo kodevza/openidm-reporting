@@ -8,9 +8,10 @@ import {ActiveHistoryFilters, HistoryColumnChoices, HistoryPagination, HistoryTo
 import {HistoryTable} from './HistoryTable';
 import type {Catalog} from './types';
 import {useHistoryTable, type HistoryTableModel} from './useHistoryTable';
+import {useTaskSelection} from './useTaskSelection';
 import {useHistoryDownload} from './useHistoryDownload';
 
-export function HistoryApp({request, myTasks = false}: {request: Request; myTasks?: boolean}) {
+export function HistoryApp({request, myTasks = false, rejectTask}: {request: Request; myTasks?: boolean; rejectTask?: ReportProps['rejectTask']}) {
   const client = useMemo(() => new ReportingClient(request), [request]);
   const peopleClient = useMemo(() => new PeopleClient(request), [request]);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -44,7 +45,7 @@ export function HistoryApp({request, myTasks = false}: {request: Request; myTask
     );
   }
 
-  return <Report catalog={catalog} client={client} peopleClient={peopleClient} myTasks={myTasks}/>;
+  return <Report catalog={catalog} client={client} peopleClient={peopleClient} myTasks={myTasks} rejectTask={myTasks ? rejectTask : undefined}/>;
 }
 
 interface ReportProps {
@@ -52,6 +53,7 @@ interface ReportProps {
   client: ReportingClient;
   peopleClient: PeopleClient;
   myTasks: boolean;
+  rejectTask?: (id: string) => Promise<void>;
 }
 
 function historyStatus(model: HistoryTableModel, myTasks: boolean) {
@@ -64,10 +66,11 @@ function historyStatus(model: HistoryTableModel, myTasks: boolean) {
   return messages.history.pageSummary(rowCount, pageIndex + 1);
 }
 
-function Report({catalog, client, peopleClient, myTasks}: ReportProps) {
+function Report({catalog, client, peopleClient, myTasks, rejectTask}: ReportProps) {
   const model = useHistoryTable(catalog, client, myTasks);
   const {selected, selectWorkflow, filters, invalidRange} = model;
   const {download, downloading, exportError} = useHistoryDownload(client, catalog.workflows, selected, filters, invalidRange);
+  const selection = useTaskSelection(client, rejectTask, model.refreshPage);
   const [showColumns, setShowColumns] = useState(false);
 
   return (
@@ -88,7 +91,21 @@ function Report({catalog, client, peopleClient, myTasks}: ReportProps) {
       {showColumns && <HistoryColumnChoices model={model}/>}
       <p role="status" className="text-muted history-status">{historyStatus(model, myTasks)}</p>
       {exportError && <p role="alert" className="text-danger">{exportError}</p>}
-      <HistoryTable catalog={catalog} model={model} peopleClient={peopleClient} myTasks={myTasks}/>
+      {rejectTask && (
+        <div className="history-toolbar">
+          <button type="button" className="btn btn-default" disabled={selection.busy} onClick={selection.selectAll}>
+            Select all pending tasks
+          </button>{' '}
+          <button type="button" className="btn btn-default" disabled={selection.busy || !selection.ids.size} onClick={selection.clear}>
+            Clear selection
+          </button>{' '}
+          <button type="button" className="btn btn-danger" disabled={selection.busy || !selection.ids.size} onClick={selection.reject}>
+            Reject selected ({selection.ids.size})
+          </button>
+          <p role="status">{selection.status}</p>
+        </div>
+      )}
+      <HistoryTable catalog={catalog} model={model} peopleClient={peopleClient} myTasks={myTasks} selection={rejectTask ? selection : undefined}/>
       <HistoryPagination model={model}/>
     </div>
   );

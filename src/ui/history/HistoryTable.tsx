@@ -6,6 +6,7 @@ import {ColumnFilter} from './ColumnFilter';
 import type {Catalog, FilterValue, HistoryColumn, TableRow} from './types';
 import {columnId} from './useColumnVisibility';
 import type {HistoryTableModel} from './useHistoryTable';
+import type {useTaskSelection} from './useTaskSelection';
 
 function columnWidth(column: HistoryColumn) {
   if (column.filterType === 'date') return 240;
@@ -40,9 +41,10 @@ interface Props {
   model: HistoryTableModel;
   peopleClient: PeopleClient;
   myTasks: boolean;
+  selection?: ReturnType<typeof useTaskSelection>;
 }
 
-export function HistoryTable({catalog, model, peopleClient, myTasks}: Props) {
+export function HistoryTable({catalog, model, peopleClient, myTasks, selection}: Props) {
   const {table, visibility, clearVersion, setFilter} = model;
   const [openFilters, setOpenFilters] = useState<Record<string, boolean>>({});
   const {columns} = catalog;
@@ -57,6 +59,7 @@ export function HistoryTable({catalog, model, peopleClient, myTasks}: Props) {
     <div className="table-responsive">
       <table className="table table-striped table-hover history-table" style={{'--history-table-min-width': minWidth + 'px'}}>
         <colgroup>
+          {selection && <col style={{width: 70}}/>}
           {visibleColumns.map(column => (
             <col key={columnId(column)} style={{'--history-column-width': columnWidth(column) + 'px'}}/>
           ))}
@@ -65,6 +68,7 @@ export function HistoryTable({catalog, model, peopleClient, myTasks}: Props) {
         <thead>
           {table.getHeaderGroups().map(group => (
             <tr key={group.id}>
+              {selection && <th scope="col">Select</th>}
               {group.headers.map(header => {
                 const key = header.column.id;
                 const index = columns.findIndex(column => columnId(column) === key);
@@ -108,16 +112,23 @@ export function HistoryTable({catalog, model, peopleClient, myTasks}: Props) {
         <tbody>
           {table.getRowModel().rows.map(row => {
             const processId = row.original.raw[processIdIndex];
+            const taskId = row.original.taskId;
             const workflowHref = !myTasks && processId != null && String(processId).trim()
               ? '../admin/#workflow/processinstance/' + encodeURIComponent(String(processId))
               : undefined;
             return (
               <tr key={row.id}>
+                {selection && <td>
+                  {taskId && (
+                    <input type="checkbox" aria-label={'Select task ' + taskId}
+                      checked={selection.ids.has(taskId)} disabled={selection.busy || model.loading}
+                      onChange={() => selection.toggle(taskId)}/>
+                  )}
+                </td>}
                 {row.getVisibleCells().map(cell => {
                   const index = columns.findIndex(column => columnId(column) === cell.column.id);
-                  const taskId = row.original.taskId;
                   const href = index === processIdIndex ? workflowHref
-                    : columns[index].key === 'status' && typeof taskId === 'string' && taskId
+                    : !myTasks && columns[index].key === 'status' && typeof taskId === 'string' && taskId
                       ? '../admin/#workflow/taskinstance/' + encodeURIComponent(taskId)
                       : undefined;
                   return <HistoryCell key={cell.id} row={row.original} index={index} workflowHref={href}/>;

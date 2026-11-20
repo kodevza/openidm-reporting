@@ -68,18 +68,27 @@ namespace ReportingApi {
         return workflows.sort(function (a, b) { return a.title.localeCompare(b.title); });
     }
 
-    export function activeTaskId(openidm: IDM, record: Record<string, any>): string | null {
+    export function activeTaskId(openidm: IDM, record: Record<string, any>, assignee?: string): string | null {
         var processId = record.processId || record._id;
         if (typeof processId !== 'string' || !processId.trim()) { return null; }
         try {
-            var tasks = nativeObject(openidm.query('workflow/taskinstance', {
-                _queryId:'filtered-query', processInstanceId:processId
-            }, ['_id']));
+            var params: Record<string, string> = {_queryId:'filtered-query', processInstanceId:processId};
+            var fields = ['_id'];
+            if (assignee) {
+                params.assignee = assignee;
+                fields.push('assignee', 'processDefinitionId', 'taskDefinitionKey');
+            }
+            var tasks = nativeObject(openidm.query('workflow/taskinstance', params, fields));
             if (tasks && Array.isArray(tasks.result) && tasks.result.length === 1) {
-                var taskId = tasks.result[0]._id;
+                var task = tasks.result[0];
+                if (assignee && (task.assignee !== assignee || task.taskDefinitionKey !== 'acceptOwnership' ||
+                        typeof task.processDefinitionId !== 'string' ||
+                        task.processDefinitionId.split(':')[0] !== 'servicePrincipalOwner')) { return null; }
+                var taskId = task._id;
                 return typeof taskId === 'string' && taskId.trim() ? taskId : null;
             }
         } catch (error) {
+            if (assignee) { throw {code:503, message:'Unable to load assigned workflow tasks'}; }
             // Keep the persisted history available if the workflow engine is unavailable.
         }
         return null;

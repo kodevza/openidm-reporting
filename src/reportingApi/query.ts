@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: CDDL-1.1
 namespace ReportingApi {
     export function readPage(openidm: IDM, report: ReportProfile, source: string, offset: number,
-            pageSize: number, queryFilter: string, includeTasks: boolean) {
+            pageSize: number, queryFilter: string, includeTasks: boolean, myTasks: boolean) {
         // Explicit projection limits the fields read. No caller-supplied resource or filter.
         var fields = ['_id'];
         if (includeTasks && report.columns.some(function (column) { return column.path === 'processId'; })) {
             fields.push('processId');
         }
+        if (includeTasks && myTasks) { fields.push('status'); }
         report.columns.forEach(function (column) {
             if (column.path !== undefined) {
                 var field = column.path.split('.')[0];

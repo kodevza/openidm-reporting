@@ -100,8 +100,8 @@
         // Scope My Tasks to the signed-in account using the configured reviewer field.
         var personal = myTasks ? {reviewerPath:reviewerPath!, accountId:accountId!} : undefined;
         var queryFilter = ReportingApi.buildFilter(openidm, report, params, personal);
-        var includeTasks = !myTasks && reportId === 'workflow-history' && pageSize === 50 && params.taskLinks === 'true';
-        var page = ReportingApi.readPage(openidm, report, sources[sourceIndex], Number(offset), pageSize, queryFilter, includeTasks);
+        var includeTasks = reportId === 'workflow-history' && pageSize === 50 && params.taskLinks === 'true';
+        var page = ReportingApi.readPage(openidm, report, sources[sourceIndex], Number(offset), pageSize, queryFilter, includeTasks, myTasks);
         var output = ReportingApi.renderRows(openidm, report, page.records);
         var moreSources = sourceIndex + 1 < sources.length;
         return {
@@ -115,7 +115,10 @@
             header:output.header,
             csv:output.csv,
             taskIds:includeTasks ? page.records.map(function (record: Record<string, any>) {
-                return ReportingApi.activeTaskId(openidm, record);
+                if (!myTasks) { return ReportingApi.activeTaskId(openidm, record); }
+                var assignee = context.security && context.security.authenticationId;
+                return record.status === 'pending' && assignee
+                    ? ReportingApi.activeTaskId(openidm, record, assignee) : null;
             }) : undefined,
             // The pair identifies where the next table or export request should resume.
             nextOffset:page.hasMore ? Number(offset) + pageSize : (moreSources ? 0 : null),

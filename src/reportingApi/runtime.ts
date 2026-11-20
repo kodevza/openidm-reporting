@@ -5,7 +5,7 @@ interface ReportColumn { filterType?: 'text' | 'person' | 'enum' | 'date'; filte
 interface ReportProfile { id: string; title: string; filename: string; source?: string; sources?: string[]; filter?: string; columns: ReportColumn[]; }
 interface ReportingConfig { defaultReport: string; reports: ReportProfile[]; }
 declare var request: { method: string; additionalParameters?: Record<string, any> };
-declare var context: { security?: { authorization?: { roles?: string[]; id?: string; component?: string } } };
+declare var context: { security?: { authenticationId?: string; authorization?: { roles?: string[]; id?: string; component?: string } } };
 declare var openidm: ReportingApi.IDM;
 namespace ReportingApi {
     export interface ReportChoice {

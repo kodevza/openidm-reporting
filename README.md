@@ -16,6 +16,13 @@ reviewer. The dashboard's task form remains available from the OpenIDM
 dashboard. My Tasks does not expose the directory of people or the global
 workflow definition catalog.
 
+Select pending ownership tasks individually or use **Select all pending tasks**
+to select eligible tasks across all pages, including tasks hidden by table
+filters. **Reject selected** asks for confirmation, then submits each decision
+through OpenIDM's standard task action. The report refreshes after the batch
+and keeps any failed tasks selected for retry. A rejection can advance the
+workflow to the next reviewer.
+
 ## Workflow history
 
 **Workflow History** opens a full page in the main content area of both Admin

@@ -192,3 +192,38 @@ test('people dropdown searches inside its menu and supports keyboard selection a
  assert.equal(ui.container.querySelectorAll('col').length,3);
  assert.equal(window.getComputedStyle(ui.container.querySelector('table')).tableLayout,'fixed');
 });
+
+test('My Tasks selects across pages, confirms rejection and retains failed tasks', async () => {
+ const rejected = [];
+ const originalConfirm = window.confirm;
+ let confirm = false;
+ window.confirm = () => confirm;
+ try {
+  const request = async uri => {
+   const params = new URLSearchParams(uri.split('?')[1]);
+   if (params.has('capabilities')) return {...catalog,workflows:[]};
+   return params.get('offset') === '0'
+    ? page([['first','pending','Ada','tenant'],['closed','accepted','Ada','tenant']],{
+      taskIds:['t1',null],nextOffset:50,nextSourceIndex:0,
+     })
+    : page([['second','pending','Ada','tenant']],{taskIds:['t2']});
+  };
+  render(h(HistoryApp,{request,myTasks:true,rejectTask:async id=>{
+   rejected.push(id);
+   if(id==='t2') throw Error('Already completed');
+  }}));
+  await screen.findByRole('checkbox',{name:'Select task t1'});
+  assert.equal(screen.getAllByRole('checkbox').length,1);
+  act(()=>fireEvent.click(screen.getByRole('button',{name:'Select all pending tasks'})));
+  const reject = await screen.findByRole('button',{name:'Reject selected (2)'});
+  act(()=>fireEvent.click(reject));
+  assert.deepEqual(rejected,[]);
+  confirm = true;
+  act(()=>fireEvent.click(reject));
+  await screen.findByText('Rejected: 1. Failed: 1.');
+  assert.deepEqual(rejected,['t1','t2']);
+  assert.ok(screen.getByRole('button',{name:'Reject selected (1)'}));
+ } finally {
+  window.confirm = originalConfirm;
+ }
+});

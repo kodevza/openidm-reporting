@@ -6,12 +6,12 @@ const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../assets/reportEndpoint.js'), 'utf8');
 const shippedConfig = JSON.parse(fs.readFileSync(path.join(__dirname, '../assets/custom-reporting.json'), 'utf8'));
 const defaultConfig = {...shippedConfig, defaultReport:'ownership-history', reports:[shippedConfig.reports[0]]};
-function run({roles=['openidm-auditor'], params={}, method='read', account={}, records=[], config=defaultConfig, wrapped=false, definitions=[], users=[], principals=[], tasks=[]}={}) {
+function run({roles=['openidm-auditor'], params={}, method='read', account={}, authenticationId, records=[], config=defaultConfig, wrapped=false, definitions=[], users=[], principals=[], tasks=[]}={}) {
     const wrap = value => wrapped ? {toString(){return JSON.stringify(value);}} : value;
     const calls=[];
     const reads=[];
     const result=vm.runInNewContext(source, {request:{method,additionalParameters:params},
-        context:{security:{authorization:{roles,...account}}}, openidm:{
+        context:{security:{authenticationId,authorization:{roles,...account}}}, openidm:{
             read(id){reads.push(id); return wrap(config);},
             query(...args){calls.push(args);if(args[0]==='workflow/taskinstance') return wrap({result:tasks.filter(task=>task.processInstanceId===args[1].processInstanceId)});return wrap({result:args[0] === 'workflow/processdefinition' ? definitions : (args[0] === 'managed/user' ? users : (args[0] === 'managed/entraServicePrincipal' ? principals : records))});}
         }});
@@ -309,4 +309,24 @@ test('My Tasks applies an immutable managed reviewer scope to table and export q
     assert.throws(()=>run({...personal, params:{myTasks:'true', filters:'{"reviewer":"other-account"}'}}), e=>e.code===400);
     assert.throws(()=>run({...personal, account:{id:'my-account', component:'internal/user'}, params:{myTasks:'true'}}), e=>e.code===403);
     assert.throws(()=>run({...personal, roles:[], params:{myTasks:'true'}}), e=>e.code===403);
+});
+
+test('My Tasks exposes rejectable IDs only for pending ownership tasks assigned to the caller',()=>{
+    const task = {taskDefinitionKey:'acceptOwnership',processDefinitionId:'servicePrincipalOwner:3:1'};
+    const {result,calls} = run({
+        config:shippedConfig, roles:['openidm-authorized'],
+        account:{component:'managed/user',id:'my-account'}, authenticationId:'my-user',
+        params:{myTasks:'true',pageSize:'50',taskLinks:'true'},
+        records:['p1','p2','p3','p4'].map((_id,index)=>({_id,status:index===3?'accepted':'pending'})),
+        tasks:[
+            {...task,_id:'t1',processInstanceId:'p1',assignee:'my-user'},
+            {...task,_id:'t2',processInstanceId:'p2',assignee:'someone-else'},
+            {...task,_id:'t3',processInstanceId:'p3',assignee:'my-user',taskDefinitionKey:'other'},
+            {...task,_id:'t4',processInstanceId:'p4',assignee:'my-user'}
+        ]
+    });
+    assert.deepEqual(Array.from(result.taskIds),['t1',null,null,null]);
+    const queries = calls.filter(call=>call[0]==='workflow/taskinstance');
+    assert.equal(queries.length,3);
+    assert.ok(queries.every(call=>call[1].assignee==='my-user'));
 });

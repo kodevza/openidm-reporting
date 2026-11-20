@@ -6,7 +6,7 @@ import {HistoryApp} from './history/HistoryApp';
 import type {Request} from './shared/reportingEndpoint';
 
 // The legacy host owns the container. Preact renders only inside that node.
-export function mount(element:HTMLElement,request:Request,myTasks=false) {
-  render(h(HistoryApp,{request,myTasks}),element);
+export function mount(element:HTMLElement,request:Request,myTasks=false,rejectTask?:(id:string)=>Promise<void>) {
+  render(h(HistoryApp,{request,myTasks,rejectTask}),element);
   return ()=>render(null,element);
 }

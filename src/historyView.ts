@@ -2,7 +2,8 @@
 // The host view owns routing/templates; Preact owns everything inside the report body.
 define(['org/forgerock/commons/ui/common/main/AbstractView',
     'org/forgerock/openidm/ui/common/delegates/ResourceDelegate',
-    'org/forgerock/openidm/ui/common/workflow/WorkflowHistoryApp'], function (AbstractView: any, delegate: any, app: any) {
+    'org/forgerock/openidm/ui/common/workflow/WorkflowHistoryApp',
+    'org/forgerock/openidm/ui/common/workflow/WorkflowDelegate'], function (AbstractView: any, delegate: any, app: any, workflow: any) {
     var cleanup: (() => void) | null = null, generation = 0;
     return new (AbstractView.extend({
         template:'templates/reports/WorkflowHistory.html',
@@ -22,7 +23,11 @@ define(['org/forgerock/commons/ui/common/main/AbstractView',
                 }
                 var unmount = app.mount(element, function (uri: string) {
                     return Promise.resolve(delegate.getResource(myTasks ? uri + '&myTasks=true' : uri));
-                }, myTasks);
+                }, myTasks, myTasks ? function (id: string) {
+                    return new Promise<void>(function (resolve, reject) {
+                        workflow.completeTask(encodeURIComponent(id), {decision:'reject'}, resolve, reject);
+                    });
+                } : undefined);
                 var observer = new MutationObserver(function () {
                     if (!document.documentElement.contains(element)) { dispose(); }
                 });
